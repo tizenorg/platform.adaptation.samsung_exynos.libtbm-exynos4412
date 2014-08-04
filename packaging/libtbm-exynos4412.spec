@@ -1,26 +1,32 @@
 Name:           libtbm-exynos4412
-Version:        1.0.4
-Release:        6
+Version:        1.0.5
+Release:        1
 License:        MIT
-Summary:        Tizen Buffer Manager - exynos4412 backend
+Summary:        The exynos4412 tbm backend
 Group:          System/Libraries
 ExcludeArch:    i586
 Source0:        %{name}-%{version}.tar.gz
 
+BuildRequires:  pkgconfig(pthread-stubs)
+BuildRequires:  pkgconfig(libdrm)
+BuildRequires:  pkgconfig(libdrm_exynos)
+BuildRequires:  pkgconfig(libtbm)
+
 %description
-descriptionion: ${summary}
+descriptionion: Tizen Buffer manager backend module for exynos4412
 
 %prep
 %setup -q
 
 %build
 
-autoreconf -vfi
-./configure --prefix=%{_prefix} --libdir=%{_libdir}/bufmgr
+%reconfigure --prefix=%{_prefix} --libdir=%{_libdir}/bufmgr --disable-cachectrl \
+            CFLAGS="${CFLAGS} -Wall -Werror" LDFLAGS="${LDFLAGS} -Wl,--hash-style=both -Wl,--as-needed"
 
-make %{?jobs:-j%jobs}
+make %{?_smp_mflags}
 
 %install
+rm -rf %{buildroot}
 mkdir -p %{buildroot}/usr/share/license
 cp -af COPYING %{buildroot}/usr/share/license/%{name}
 %make_install
@@ -35,6 +41,7 @@ ln -s libtbm_exynos4412.so %{_libdir}/bufmgr/libtbm_default.so
 %postun -p /sbin/ldconfig
 
 %files
-/usr/share/license/%{name}
+%manifest libtbm-exynos4412.manifest
 %{_libdir}/bufmgr/libtbm_*.so*
+/usr/share/license/%{name}
 
