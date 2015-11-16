@@ -111,6 +111,27 @@ char* target_name()
 #define TBM_SURFACE_ALIGNMENT_PITCH_RGB (64)
 #define TBM_SURFACE_ALIGNMENT_PITCH_YUV (16)
 
+#define SZ_1M                                   0x00100000
+#define S5P_FIMV_D_ALIGN_PLANE_SIZE             64
+                                                                                                                        
+#define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
+#define S5P_FIMV_MAX_FRAME_SIZE                 (2 * SZ_1M)
+#define SCMN_IMGB_MAX_PLANE 4
+#define TBM_API_CHANGE
+#define ALIGN_TO_4KB(x)   ((((x) + (1 << 12) - 1) >> 12) << 12)
+#define S5P_FIMV_D_ALIGN_PLANE_SIZE             64
+#define S5P_FIMV_NUM_PIXELS_IN_MB_ROW           16
+#define S5P_FIMV_NUM_PIXELS_IN_MB_COL           16
+#define CHOOSE_MAX_SIZE(a,b) ((a) > (b) ? (a) : (b))
+#define S5P_FIMV_DEC_BUF_ALIGN                  (8 * 1024)
+#define S5P_FIMV_ENC_BUF_ALIGN                  (8 * 1024)
+#define S5P_FIMV_NV12M_HALIGN                   16
+#define S5P_FIMV_NV12M_LVALIGN                  16
+#define S5P_FIMV_NV12M_CVALIGN                  8
+#define S5P_FIMV_NV12MT_HALIGN                  128
+#define S5P_FIMV_NV12MT_VALIGN                  64
+#define S5P_FIMV_NV12M_SALIGN                   2048
+#define S5P_FIMV_NV12MT_SALIGN                  8192
 
 /* check condition */
 #define EXYNOS4412_RETURN_IF_FAIL(cond) {\
@@ -294,11 +315,11 @@ _exynos4412_bo_handle (tbm_bo_exynos4412 bo_exynos4412, int device)
     case TBM_DEVICE_CPU:
         if (!bo_exynos4412->pBase)
         {
-            struct drm_exynos_gem_map arg = {0,};
+            struct drm_mode_map_dumb arg = {0,};
             void *map = NULL;
 
             arg.handle = bo_exynos4412->gem;
-            if (drmCommandWriteRead (bo_exynos4412->fd, DRM_EXYNOS_GEM_MAP, &arg, sizeof(arg)))
+            if (drmIoctl (bo_exynos4412->fd, DRM_IOCTL_MODE_MAP_DUMB, &arg))
             {
                TBM_EXYNOS4412_LOG ("error Cannot map_dumb gem=%d\n", bo_exynos4412->gem);
                return (tbm_bo_handle) NULL;
@@ -1233,6 +1254,69 @@ tbm_exynos4412_surface_supported_format(uint32_t **formats, uint32_t *num)
     return 1;
 }
 
+int new_calc_plane(int width, int height)                                                                               
+{                                                                                                                       
+    int mbX, mbY;                                                                                                       
+                                                                                                                        
+    mbX = DIV_ROUND_UP(width, S5P_FIMV_NUM_PIXELS_IN_MB_ROW);                                                           
+    mbY = DIV_ROUND_UP(height, S5P_FIMV_NUM_PIXELS_IN_MB_COL);                                                          
+                                                                                                                        
+    if (width * height < S5P_FIMV_MAX_FRAME_SIZE)                                                                       
+      mbY = (mbY + 1) / 2 * 2;                                                                                          
+                                                                                                                        
+
+    int cal = ((mbX * S5P_FIMV_NUM_PIXELS_IN_MB_COL) *                                                                     
+     (mbY * S5P_FIMV_NUM_PIXELS_IN_MB_ROW));                                       
+
+    printf ("[cyeon][%s] return :%d \n", __func__, cal);
+
+    return cal;
+}
+
+int
+calc_yplane(int width, int height)
+{
+    int mbX, mbY;
+
+    mbX = SIZE_ALIGN(width + 24, S5P_FIMV_NV12MT_HALIGN);
+    mbY = SIZE_ALIGN(height + 16, S5P_FIMV_NV12MT_VALIGN);
+
+    int cal = SIZE_ALIGN(mbX * mbY, S5P_FIMV_DEC_BUF_ALIGN);
+
+    printf ("[cyeon][%s] return :%d \n", __func__, cal);
+
+    return cal;
+}
+
+int
+calc_uvplane(int width, int height)
+{
+    int mbX, mbY;
+
+    mbX = SIZE_ALIGN(width + 16, S5P_FIMV_NV12MT_HALIGN);
+    mbY = SIZE_ALIGN(height + 4, S5P_FIMV_NV12MT_VALIGN);
+    int cal = SIZE_ALIGN(mbX * mbY, S5P_FIMV_DEC_BUF_ALIGN);
+    printf ("[cyeon][%s] return :%d \n", __func__, cal);
+    return cal;
+}
+
+int new_calc_yplane(int width, int height)
+{
+    int cal = (ALIGN_TO_4KB(new_calc_plane(width, height) +
+              S5P_FIMV_D_ALIGN_PLANE_SIZE));
+
+    printf ("[cyeon][%s] return :%d \n", __func__, cal);
+    return cal;
+}
+
+int new_calc_uvplane(int width, int height)
+{
+    int cal = (ALIGN_TO_4KB((new_calc_plane(width, height) >> 1) +
+              S5P_FIMV_D_ALIGN_PLANE_SIZE));
+
+    printf ("[cyeon][%s] return :%d \n", __func__, cal);
+    return cal;
+}
 
 /**
  * @brief get the plane data of the surface.
@@ -1334,15 +1418,17 @@ tbm_exynos4412_surface_get_plane_data(tbm_surface_h surface, int width, int heig
             {
                 _offset = 0;
 				_pitch = SIZE_ALIGN( width ,TBM_SURFACE_ALIGNMENT_PITCH_YUV);
-                _size = SIZE_ALIGN(_pitch*height,TBM_SURFACE_ALIGNMENT_PLANE_NV12);
+                _size = CHOOSE_MAX_SIZE(calc_yplane(width, height), new_calc_yplane(width, height));
                 _bo_idx = 0;
+                printf ("[cyeon][%s] plane idx 0 size:%d \n", __func__, _size);
             }
             else if( plane_idx ==1 )
             {
                 _offset = 0;
 				_pitch = SIZE_ALIGN( width ,TBM_SURFACE_ALIGNMENT_PITCH_YUV/2);
-				_size = SIZE_ALIGN(_pitch*(height/2),TBM_SURFACE_ALIGNMENT_PLANE_NV12);
+				_size = CHOOSE_MAX_SIZE(calc_uvplane(width, height), new_calc_uvplane(width, height));
                 _bo_idx = 1;
+                printf ("[cyeon][%s] plane idx 1 size:%d \n", __func__, _size);
             }
             break;
         case TBM_FORMAT_NV21:
@@ -1674,13 +1760,15 @@ tbm_exynos4412_surface_get_size(tbm_surface_h surface, int width, int height, tb
 			bpp = 12;
 			 //plane_idx == 0
 			 {
-				 _pitch = SIZE_ALIGN( width ,TBM_SURFACE_ALIGNMENT_PITCH_YUV);
-				 _size = SIZE_ALIGN(_pitch*height,TBM_SURFACE_ALIGNMENT_PLANE_NV12);
+				 _pitch = SIZE_ALIGN(width ,TBM_SURFACE_ALIGNMENT_PITCH_YUV);
+                 _size = CHOOSE_MAX_SIZE(calc_yplane(width,height), new_calc_yplane(width,height));
+                printf ("[cyeon][%s] plane idx 0 size:%d \n", __func__, _size);
 			 }
 			 //plane_idx ==1
 			 {
 				 _pitch = SIZE_ALIGN( width ,TBM_SURFACE_ALIGNMENT_PITCH_YUV/2);
-				 _size += SIZE_ALIGN(_pitch*(height/2),TBM_SURFACE_ALIGNMENT_PLANE_NV12);
+			     _size += CHOOSE_MAX_SIZE(calc_uvplane(width,height), new_calc_uvplane(width,height));
+                printf ("[cyeon][%s] plane idx 0+1 size:%d \n", __func__, _size);
 			 }
 			 break;
 
